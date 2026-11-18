@@ -24,7 +24,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      CLIPADOR_RUNTIME_ROOT: ${{ runner.temp }}\clipador-baseline\Clipador
+      CLIPADOR_RUNTIME_ROOT: runtime/Clipador
     steps:
       - uses: actions/checkout@v4.2.2
       - uses: actions/setup-python@v5.6.0
