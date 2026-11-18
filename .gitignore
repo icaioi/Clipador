@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+.env
+.env.*
+*.key
+*.pem
+*.exe
+*.dll
+*.pyd
+*.zip
+*.partial
+*.log
+*.db
+*.sqlite*
+runtime/
+dist/
+artifacts/
+backups/
+perfil_navegador/
+clipes/
+buffer/
+local-tools/
+# One-off recovery scripts contain local historical paths and are not build inputs.
+migrate_queue.py
+recover_unconfirmed.py
+check_background.py
