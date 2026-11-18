@@ -1,0 +1,98 @@
+name: Windows release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Never interrupt asset upload/publication. All versions use one publication lane.
+concurrency:
+  group: clipador-public-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      CLIPADOR_RUNTIME_ROOT: ${{ runner.temp }}\clipador-baseline\Clipador
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Install pinned build dependencies
+        run: |
+          python -m pip install --only-binary=:all: bytecode==0.19.2 cryptography==46.0.3 cffi==2.0.0 pycparser==2.23
+          if ($LASTEXITCODE -ne 0) { throw 'Build dependency installation failed' }
+      - name: Check release core with isolated fixtures
+        run: |
+          python check_release.py
+          if ($LASTEXITCODE -ne 0) { throw 'Release core checks failed' }
+          python check_updater.py
+          if ($LASTEXITCODE -ne 0) { throw 'Signed updater checks failed' }
+      - name: Download and verify immutable clean baseline
+        env:
+          BASELINE_SHA256: ${{ vars.CLIPADOR_RUNTIME_SHA256 }}
+        run: |
+          if ($env:BASELINE_SHA256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'Missing valid CLIPADOR_RUNTIME_SHA256 repository variable' }
+          $download = Join-Path $env:RUNNER_TEMP 'clipador-runtime-download'
+          New-Item -ItemType Directory -Path $download | Out-Null
+          gh release download runtime-base --pattern Clipador-runtime.zip --dir $download
+          if ($LASTEXITCODE -ne 0) { throw 'Baseline download failed' }
+          $archive = Join-Path $download 'Clipador-runtime.zip'
+          if ((Get-FileHash -Algorithm SHA256 $archive).Hash -ne $env:BASELINE_SHA256) { throw 'Baseline SHA256 mismatch' }
+          $env:CLIPADOR_BASELINE_ZIP = $archive
+          python -c "import os; from pathlib import Path; from release_builder import extract_baseline; extract_baseline(os.environ['CLIPADOR_BASELINE_ZIP'], Path(os.environ['CLIPADOR_RUNTIME_ROOT']).parent)"
+          if ($LASTEXITCODE -ne 0) { throw 'Baseline extraction failed' }
+      - name: Build and sign clean full and delta artifacts
+        id: build
+        env:
+          CLIPADOR_SIGNING_KEY: ${{ secrets.CLIPADOR_SIGNING_KEY }}
+        run: |
+          $generation = [long]'${{ github.run_number }}' * 1000 + [long]'${{ github.run_attempt }}'
+          $version = "v1.0.$generation"
+          $output = Join-Path $env:RUNNER_TEMP 'clipador-release-output'
+          python release_builder.py --generation $generation --commit '${{ github.sha }}' --output $output
+          if ($LASTEXITCODE -ne 0) { throw 'Signed release build failed' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "generation=$generation" >> $env:GITHUB_OUTPUT
+          "output=$output" >> $env:GITHUB_OUTPUT
+      - name: Upload all assets to draft then publish atomically
+        env:
+          RELEASE_VERSION: ${{ steps.build.outputs.version }}
+          RELEASE_GENERATION: ${{ steps.build.outputs.generation }}
+          RELEASE_OUTPUT: ${{ steps.build.outputs.output }}
+        run: |
+          # Concurrency does not guarantee FIFO: never make an older generation latest.
+          $published = gh release list --limit 1000 --json tagName,isDraft,isPrerelease | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not inspect published release generations' }
+          foreach ($release in $published) {
+            if (-not $release.isDraft -and -not $release.isPrerelease -and $release.tagName -match '^v1\.0\.(\d+)$') {
+              if ([long]$Matches[1] -ge [long]$env:RELEASE_GENERATION) { throw 'Refusing to publish a stale release generation' }
+            }
+          }
+          $assets = @('Clipador-full.zip', 'Clipador-update.zip', 'release.json', 'release.sig') | ForEach-Object { Join-Path $env:RELEASE_OUTPUT $_ }
+          gh release create $env:RELEASE_VERSION @assets --draft --target '${{ github.sha }}' --title "Clipador $env:RELEASE_VERSION" --notes "Signed Windows release built from commit ${{ github.sha }}. Full portable installation and app-only update included."
+          if ($LASTEXITCODE -ne 0) { throw 'Draft creation or asset upload failed; no release was published' }
+          $draft = gh release view $env:RELEASE_VERSION --json isDraft,assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $draft.isDraft -or $draft.assets.Count -ne 4) { throw 'Draft asset verification failed' }
+          foreach ($name in @('Clipador-full.zip', 'Clipador-update.zip', 'release.json', 'release.sig')) {
+            $asset = @($draft.assets | Where-Object { $_.name -eq $name })
+            $local = Get-Item (Join-Path $env:RELEASE_OUTPUT $name)
+            if ($asset.Count -ne 1 -or $asset[0].state -ne 'uploaded' -or $asset[0].size -ne $local.Length) { throw 'Incomplete draft asset upload' }
+          }
+          gh release edit $env:RELEASE_VERSION --draft=false --prerelease=false --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }
+          "### Published $env:RELEASE_VERSION" >> $env:GITHUB_STEP_SUMMARY
+          "Assets: Clipador-full.zip, Clipador-update.zip, release.json, release.sig" >> $env:GITHUB_STEP_SUMMARY
