@@ -42,6 +42,71 @@ class ReleaseChecks(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 scan_file(source, 'fixture', needles)
 
+    def test_verified_baseline_provenance_keeps_secret_scanning(self):
+        key = Ed25519PrivateKey.generate()
+        metadata = {'generation': 1001, 'version': 'v1.0.1001',
+                    'commit': 'a' * 40, 'runtime': 'runtime-1'}
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            baseline = root/'verified-baseline'
+            home = root/'build-host-home'
+            (baseline/'_internal').mkdir(parents=True)
+            (home/'Documents/Clipador').mkdir(parents=True)
+            (baseline/'_internal/canais.toml').write_text(
+                '[ia]\nchave="baseline-configured-secret"\n', encoding='utf-8')
+            (home/'Documents/Clipador/canais.toml').write_text(
+                '[ia]\nchave="profile-configured-secret"\n', encoding='utf-8')
+            strict = private_needles(baseline, home)
+            secrets = private_needles(baseline, home, include_home=False)
+            self.assertIn(str(home).encode('utf-8'), strict)
+            self.assertNotIn(str(home).encode('utf-8'), secrets)
+            self.assertIn(b'baseline-configured-secret', secrets)
+            self.assertIn(b'profile-configured-secret', secrets)
+            compiler_path = str(home/'vendor-build/module.c').encode('utf-8')
+            vendor = baseline/'_internal/vendor.pyd'
+            vendor.write_bytes(compiler_path)
+            provenance = {'baseline_root': baseline, 'baseline_needles': secrets}
+
+            # A generic vendor file only bypasses the host-home heuristic when its
+            # source is the unchanged file at its exact verified baseline location.
+            with self.assertRaises(RuntimeError):
+                write_artifacts({'_internal/vendor.pyd': vendor}, [], metadata,
+                                root/'untrusted', key, strict)
+            write_artifacts({'_internal/vendor.pyd': vendor}, [], metadata,
+                            root/'trusted', key, strict, **provenance)
+            outside = root/'vendor.pyd'
+            outside.write_bytes(compiler_path)
+            for label, files in (
+                    ('outside', {'_internal/vendor.pyd': outside}),
+                    ('remapped', {'_internal/renamed.pyd': vendor})):
+                with self.subTest(label=label), self.assertRaises(RuntimeError):
+                    write_artifacts(files, [], metadata, root/label,
+                                    key, strict, **provenance)
+
+            generated = root/'generated.py'
+            generated.write_bytes(compiler_path)
+            managed = baseline/'_internal/managed.py'
+            managed.write_bytes(compiler_path)
+            for label, source in (('generated', generated), ('managed', managed)):
+                with self.subTest(label=label), self.assertRaises(RuntimeError):
+                    write_artifacts({'_internal/managed.py': source},
+                                    ['_internal/managed.py'], metadata, root/label,
+                                    key, strict, **provenance)
+
+            # Actual configured values are rejected in both unchanged baseline and
+            # freshly generated app inputs, even when host-home scanning is relaxed.
+            for index, secret in enumerate((b'baseline-configured-secret',
+                                            b'profile-configured-secret')):
+                vendor.write_bytes(secret)
+                generated.write_bytes(secret)
+                for label, files, updates in (
+                        ('baseline-secret', {'_internal/vendor.pyd': vendor}, []),
+                        ('generated-secret', {'_internal/managed.py': generated},
+                         ['_internal/managed.py'])):
+                    with self.subTest(label=label, index=index), self.assertRaises(RuntimeError):
+                        write_artifacts(files, updates, metadata, root/f'{label}-{index}',
+                                        key, strict, **provenance)
+
     def test_signing_key_matches_public_config(self):
         key = Ed25519PrivateKey.generate()
         config = {'public_key': base64.b64encode(key.public_key().public_bytes_raw()).decode('ascii')}

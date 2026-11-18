@@ -41,9 +41,10 @@ BLOCKED = {'__pycache__', '.links', 'perfil_navegador', 'clipes', 'buffer', 'bac
 BLOCKED_SUFFIXES = {'.log', '.pyc', '.pyo', '.db', '.sqlite', '.sqlite3', '.dmp'}
 
 
-def private_needles(root, home=None):
+def private_needles(root, home=None, *, include_home=True):
+    """Collect configured secrets; optionally add the current host's home heuristic."""
     home = Path.home() if home is None else Path(home)
-    strings = {str(home), str(home).replace('\\', '/')}
+    strings = {str(home), str(home).replace('\\', '/')} if include_home else set()
 
     def collect(value, key=''):
         if isinstance(value, dict):

@@ -83,8 +83,21 @@ def signing_key(config):
     return key
 
 
-def write_artifacts(files, update_files, metadata, output, key, needles):
-    """Write complete manifests and two ZIP layouts from explicit safe file mappings."""
+def write_artifacts(files, update_files, metadata, output, key, needles, *,
+                    baseline_root=None, baseline_needles=None):
+    """Build artifacts, optionally trusting unchanged files from a verified clean baseline.
+
+    baseline_root must be the isolated, hash-verified extraction, not a live install.
+    Only a non-managed input at its exact baseline-relative location may omit the
+    current build host's home heuristic. Configured secrets are still scanned.
+    Generated/managed files and files outside that provenance remain fully scanned.
+    """
+    if (baseline_root is None) != (baseline_needles is None):
+        raise ValueError('Baseline provenance and secret needles must be supplied together')
+    baseline_root = Path(baseline_root).resolve() if baseline_root is not None else None
+    if len(update_files) != len(set(update_files)) or not set(update_files).issubset(files):
+        raise ValueError('Invalid update file inventory')
+    managed = set(update_files)
     seen = set()
     for name, source in files.items():
         canonical_path(name)
@@ -93,9 +106,12 @@ def write_artifacts(files, update_files, metadata, output, key, needles):
         seen.add(name.casefold())
         if not source.is_file() or source.is_symlink():
             raise ValueError('Missing or linked release file')
-        scan_file(source, name, needles)
-    if len(update_files) != len(set(update_files)) or not set(update_files).issubset(files):
-        raise ValueError('Invalid update file inventory')
+        source_needles = needles
+        if baseline_root is not None and name not in managed:
+            resolved = source.resolve()
+            if resolved.is_relative_to(baseline_root) and resolved == baseline_root / name:
+                source_needles = baseline_needles
+        scan_file(source, name, source_needles)
     for name in update_files:
         if name not in {'Clipador.exe', 'ClipadorWorker.exe', 'ClipadorLauncher.exe',
                         '_internal/canais.toml', '_internal/updater-config.json', '_internal/version.json'}:
@@ -186,7 +202,9 @@ def build_release(generation, commit, output):
         update_files = ['Clipador.exe', 'ClipadorWorker.exe', 'ClipadorLauncher.exe',
                         '_internal/canais.toml', '_internal/updater-config.json', '_internal/version.json']
         update_files.extend('_internal/' + name for name in helpers)
-        manifest = write_artifacts(files, update_files, metadata, output, key, needles)
+        manifest = write_artifacts(
+            files, update_files, metadata, output, key, needles,
+            baseline_root=root, baseline_needles=private_needles(root, include_home=False))
     print(json.dumps({'version': metadata['version'], 'output': str(output),
                       'artifacts': list(ARTIFACTS), 'files': len(manifest['files']),
                       'update_files': len(update_files)}, sort_keys=True))
