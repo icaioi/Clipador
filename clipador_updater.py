@@ -25,10 +25,20 @@ def _relative(name):
         raise UpdateError('A atualização tentou alterar dados fora do programa.')
     return Path(*path.parts)
 
+def _filesystem_path(path):
+    """Use extended Win32 paths without requiring admin registry changes."""
+    path=Path(path)
+    if os.name!='nt':return path
+    value=str(path.absolute())
+    if value.startswith('\\\\?\\'):return path
+    if value.startswith('\\\\'):return Path('\\\\?\\UNC\\'+value[2:])
+    return Path('\\\\?\\'+value)
+
 def _digest(file):
-    with Path(file).open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
+    with _filesystem_path(file).open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
 
 def _valid(file,record):
+    file=_filesystem_path(file)
     try:return file.is_file() and file.stat().st_size==record['size'] and _digest(file)==record['sha256']
     except OSError:return False
 
@@ -140,6 +150,7 @@ class Updater:
             raise UpdateError('O pacote recebido não corresponde à versão assinada.')
 
     def _extract(self,archive,stage,records,prefix=''):
+        stage=_filesystem_path(stage)
         expected={record['path']:record for record in records}
         with zipfile.ZipFile(archive) as source:
             infos=source.infolist()
@@ -165,6 +176,7 @@ class Updater:
                 seen.add(name)
 
     def _reuse(self,current,stage,records):
+        current=_filesystem_path(current);stage=_filesystem_path(stage)
         for record in records:
             self._check_cancel()
             relative=_relative(record['path']);source=current/relative
@@ -196,7 +208,7 @@ class Updater:
         versions=self.store/'versions';versions.mkdir(exist_ok=True)
         destination=self._destination(manifest)
         with tempfile.TemporaryDirectory(prefix='.download-',dir=self.store) as cache:
-            stage=Path(tempfile.mkdtemp(prefix='.staging-',dir=versions))
+            stage=_filesystem_path(tempfile.mkdtemp(prefix='.staging-',dir=versions))
             try:
                 update_names=set(manifest['update_files'])
                 unchanged=[record for record in manifest['files'] if record['path'] not in update_names]
@@ -218,7 +230,7 @@ class Updater:
                         shutil.rmtree(stage)
                     else:
                         if destination==current:raise InstallationInvalid('A versão em execução precisa ser reparada pelo launcher original.')
-                        shutil.rmtree(destination);stage.rename(destination)
+                        shutil.rmtree(_filesystem_path(destination));stage.rename(destination)
                 else:stage.rename(destination)
                 self._check_cancel()
                 pointer=self.store/'current.tmp'
@@ -230,7 +242,8 @@ class Updater:
                 if stage.exists():shutil.rmtree(stage)
 
     def _prune(self,keep):
-        for folder in (self.store/'versions').iterdir():
+        keep={_filesystem_path(folder) for folder in keep}
+        for folder in _filesystem_path(self.store/'versions').iterdir():
             if folder in keep or not re.fullmatch(r'[0-9]+-[0-9a-f]{12}',folder.name):continue
             try:shutil.rmtree(folder)
             except OSError:pass  # A running older version retains its files until a later launch.

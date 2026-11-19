@@ -55,6 +55,10 @@ jobs:
           $env:CLIPADOR_BASELINE_ZIP = $archive
           python -c "import os; from pathlib import Path; from release_builder import extract_baseline; extract_baseline(os.environ['CLIPADOR_BASELINE_ZIP'], Path(os.environ['CLIPADOR_RUNTIME_ROOT']).parent)"
           if ($LASTEXITCODE -ne 0) { throw 'Baseline extraction failed' }
+      - name: Check frozen updater on Windows long paths
+        run: |
+          python check_package.py
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen long-path updater check failed' }
       - name: Build and sign clean full and delta artifacts
         id: build
         env:
