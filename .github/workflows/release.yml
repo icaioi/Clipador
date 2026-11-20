@@ -87,7 +87,7 @@ jobs:
             }
           }
           $assets = @('Clipador-full.zip', 'Clipador-update.zip', 'release.json', 'release.sig') | ForEach-Object { Join-Path $env:RELEASE_OUTPUT $_ }
-          gh release create $env:RELEASE_VERSION @assets --draft --target '${{ github.sha }}' --title "Clipador $env:RELEASE_VERSION" --notes "Signed Windows release built from commit ${{ github.sha }}. Full portable installation and app-only update included."
+          gh release create $env:RELEASE_VERSION @assets --draft --target '${{ github.sha }}' --title "Clipador $env:RELEASE_VERSION" --notes "Ed25519-authenticated update built from commit ${{ github.sha }}. Full portable installation and app-only update included. The Windows executables are not Authenticode-signed: Windows application-control policies may block execution. Update authentication does not override those policies."
           if ($LASTEXITCODE -ne 0) { throw 'Draft creation or asset upload failed; no release was published' }
           $draft = gh release view $env:RELEASE_VERSION --json isDraft,assets | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or -not $draft.isDraft -or $draft.assets.Count -ne 4) { throw 'Draft asset verification failed' }

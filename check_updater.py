@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 import unittest
+from unittest.mock import patch
 import urllib.parse
 import urllib.request
 import uuid
@@ -328,6 +329,54 @@ class UpdaterChecks(unittest.TestCase):
         with self.rejected(UpdateCancelled):
             self.updater.prepare(self.current)
         self.assertTrue(cancelled.is_set(), 'Cancellation was not exercised during download')
+
+
+@unittest.skipUnless(os.name == 'nt', 'Windows launch error reporting')
+class LauncherStartChecks(unittest.TestCase):
+    def test_policy_block_is_reported_without_retry_or_lost_mutex(self):
+        import clipador_launcher as launcher
+        for log_writable in (True, False):
+            with self.subTest(log_writable=log_writable), TemporaryDirectory() as temporary:
+                folder = Path(temporary)
+                internal = folder/'_internal'
+                internal.mkdir()
+                repository = 'fixture/blocked-' + uuid.uuid4().hex
+                public = Ed25519PrivateKey.generate().public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+                (internal/'updater-config.json').write_text(json.dumps({
+                    'repository': repository, 'public_key': base64.b64encode(public).decode(),
+                    'runtime': 'fixture',
+                }), encoding='utf-8')
+                # No real program is launched and no existing profile is read.
+                profile = folder/'Documents'/'Clipador'/'canais.toml'
+                profile.parent.mkdir(parents=True)
+                profile.write_bytes(b'local-profile-must-not-change')
+                blocked = OSError('Uma política de Controle de Aplicativo bloqueou este arquivo')
+                blocked.winerror = 4551
+                with patch.object(launcher.sys, 'executable', str(folder/'ClipadorLauncher.exe')), \
+                     patch.dict(os.environ, {'LOCALAPPDATA': str(folder/'local')}), \
+                     patch.object(launcher.subprocess, 'Popen', side_effect=blocked) as start, \
+                     patch.object(launcher.ctypes.windll.user32, 'MessageBoxW', return_value=1) as notice:
+                    if log_writable:
+                        result = launcher.main(['--managed', '--ready', '--teste'])
+                    else:
+                        with patch.object(Path, 'mkdir', side_effect=PermissionError('log denied')):
+                            result = launcher.main(['--managed', '--ready', '--teste'])
+                self.assertEqual(result, 1, 'A blocked application must not report successful startup')
+                self.assertEqual(start.call_count, 1, 'Do not retry a blocked executable through another path')
+                self.assertEqual(notice.call_count, 1)
+                message = notice.call_args.args[1]
+                self.assertIn('4551', message)
+                self.assertIn(str(folder/'Clipador.exe'), message)
+                self.assertEqual(profile.read_bytes(), b'local-profile-must-not-change')
+                identifier = hashlib.sha256(repository.encode()).hexdigest()[:16]
+                mutex = launcher._Mutex('Local\\Clipador-' + identifier)
+                try:
+                    self.assertTrue(mutex.owned, 'Failed startup left the launcher permanently locked')
+                finally:
+                    mutex.close()
+                if log_writable:
+                    diagnostic = folder/'local'/'Clipador'/'updates'/identifier/'updater.log'
+                    self.assertIn('4551', diagnostic.read_text(encoding='utf-8'))
 
 
 @unittest.skipUnless(os.name == 'nt', 'Windows named mutex semantics')

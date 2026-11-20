@@ -68,8 +68,12 @@ def _spawn(folder,args,managed=False,origin=None,ready=False):
     elif args.iniciar:command.append('--iniciar')
     env=os.environ.copy()
     if origin is not None:env['CLIPADOR_ORIGINAL_INSTALL']=str(origin)
-    return subprocess.Popen(command,cwd=folder,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NO_WINDOW|subprocess.CREATE_NEW_PROCESS_GROUP,env=env)
+    try:
+        return subprocess.Popen(command,cwd=folder,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW|subprocess.CREATE_NEW_PROCESS_GROUP,env=env)
+    except OSError as error:
+        if error.filename is None:error.filename=str(executable)
+        raise
 
 def main(argv=None):
     parser=argparse.ArgumentParser()
@@ -103,6 +107,28 @@ def main(argv=None):
             if not args.managed:raise UpdateError('Inicialização de versão sem validação do bootstrap.')
             return _spawn(folder,args,origin=origin).wait()
         return _window(updater,folder,origin,args,mutex)
+    except OSError as error:
+        code=getattr(error,'winerror',None)
+        program=error.filename or str(folder)
+        if code==4551:
+            title='Execução bloqueada pelo Windows'
+            message=('O Controle de Aplicativo do Windows impediu a inicialização do Clipador (erro 4551).\n\n'
+                'Programa: '+program+'\n\n'
+                'O launcher não pode liberar essa política. Peça ao administrador do PC para revisar o bloqueio '
+                'em CodeIntegrity/Operational e autorizar uma distribuição confiável.\n\n'
+                'A assinatura das atualizações não substitui a assinatura de editor Authenticode do Windows. '
+                'Nenhuma proteção foi desativada.')
+        else:
+            title='Não foi possível iniciar o Clipador'
+            message='O Windows não conseguiu iniciar o programa.\n\nPrograma: '+program+'\n\nDetalhes: '+str(error)
+        try:
+            updater.store.mkdir(parents=True,exist_ok=True)
+            with (updater.store/'updater.log').open('a',encoding='utf-8') as file:
+                file.write('launch: WinError '+str(code)+': '+str(error)+'\nPrograma: '+program+'\n')
+        except OSError:
+            message+='\n\nNão foi possível gravar o log da falha.'
+        ctypes.windll.user32.MessageBoxW(None,message,title,0x10)
+        return 1
     finally:mutex.close()
 
 def _window(updater,folder,origin,args,mutex):
