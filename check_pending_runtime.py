@@ -18,6 +18,29 @@ actual_cleanup=clipador_cleanup.limpar_publicado
 clipador_cleanup.limpar_publicado=lambda video,clipes,platforms,log=print: actual_cleanup(
     video,clipes,platforms,log,legacy_root=root/'isolated-legacy')
 root=pasta_dados()/'clipes';ready=root/'PRONTOS PARA POSTAR';failed=root/'falhou_postar';posted=root/'postados'
+from clipador_restricoes import RestricaoPublicacao, registrar_restricao, restricoes_ativas
+# Real browser response event, fulfilled locally before any social request.
+os.environ['PLAYWRIGHT_BROWSERS_PATH']='0'
+with sync_api.sync_playwright() as driver:
+    browser=driver.chromium.launch(headless=True)
+    try:
+        page=browser.new_page()
+        page.route('**/*',lambda route:route.abort())
+        page.route('https://www.tiktok.com/tiktok/web/project/post/v1/',lambda route:route.fulfill(
+            status=200,content_type='application/json',
+            headers={'access-control-allow-origin':'*'},
+            body=json.dumps({'status_code':21,'status_msg':'fixture temporary posting restriction'})))
+        page.set_content("""<button data-e2e="post_video_button" style="width:180px;height:70px"
+            onclick="fetch('https://www.tiktok.com/tiktok/web/project/post/v1/',{method:'POST'}).then(()=>document.querySelector('section').innerText='Algo deu errado')">Publicar</button><section role="alert"></section>""")
+        postador._vigiar=lambda *args:None
+        try:postador._esperar_publicacao(page,'TikTok','Publicado com sucesso',True,'^Publicar$',timeout_min=.1)
+        except RestricaoPublicacao as error:
+            assert error.rede=='tiktok' and error.codigo==21
+        else:raise AssertionError('Posting restriction response was not surfaced')
+        page.set_content("""<button data-e2e="post_video_button" style="width:180px;height:70px"
+            onclick="document.querySelector('section').innerText='Publicado com sucesso'">Publicar</button><section></section>""")
+        assert postador._esperar_publicacao(page,'Instagram','Publicado com sucesso',True,'^Publicar$',timeout_min=.1) is True
+    finally:browser.close()
 class Driver:
     def __enter__(self):return self
     def __exit__(self,*args):return False
@@ -81,7 +104,40 @@ assert waiting.exists(),'Disabled-only pending media was consumed'
 assert waiting.with_suffix('.instagram.ok').exists()
 assert (posted/last.with_suffix('.tiktok.ok').name).exists()
 assert (posted/last.with_suffix('.instagram.ok').name).exists()
-report.write_text(json.dumps({'ok':True,'recovery':first,'disabled_only_kept_in_queue':True,'later_active_work_not_starved':True}),encoding='utf-8')
+# Persisted account restriction keeps TikTok pending while new Instagram work
+# continues; its media must not be deleted just because Instagram succeeded.
+shutil.rmtree(root);root.mkdir();calls.clear();logs.clear();completed=0;limit=1
+held=clip(ready/'nota 08',1,['instagram'])
+new=clip(ready/'nota 08',2,[])
+registrar_restricao(failed,'tiktok',21,'fixture account restriction',logs.append)
+def never_tiktok(ctx,video,caption,auto):
+    calls.append(('tiktok',video.name));raise AssertionError('Blocked TikTok was attempted')
+def new_instagram(ctx,video,caption,auto):
+    calls.append(('instagram',video.name));assert video.name==new.name;return True
+postador.postar_tiktok=never_tiktok;postador.postar_instagram=new_instagram
+postador.rodar(True,['tiktok','instagram'],(0,0),perfil='principal',redes_perfil=['tiktok','instagram'])
+assert calls==[('instagram',new.name)],calls
+assert held.exists() and held.with_suffix('.instagram.ok').exists()
+assert (failed/new.name).exists() and (failed/new.with_suffix('.instagram.ok').name).exists()
+assert not (failed/new.with_suffix('.tiktok.ok').name).exists()
+
+# A newly observed restriction is persisted after the FIRST response, not after
+# three retries, while later Instagram work is still allowed in the same run.
+shutil.rmtree(root);root.mkdir();calls.clear();logs.clear();completed=0;limit=2
+blocked=clip(ready/'nota 08',1,['instagram'])
+held=clip(ready/'nota 08',2,['instagram'])
+new=clip(ready/'nota 08',3,[])
+def restricted_tiktok(ctx,video,caption,auto):
+    calls.append(('tiktok',video.name));raise RestricaoPublicacao('tiktok',21,'fixture account restriction')
+postador.postar_tiktok=restricted_tiktok;postador.postar_instagram=new_instagram
+postador.rodar(True,['tiktok','instagram'],(0,0),perfil='principal',redes_perfil=['tiktok','instagram'])
+assert calls==[('tiktok',blocked.name),('instagram',new.name)],calls
+assert restricoes_ativas(failed,['tiktok','instagram'],logs.append)=={'tiktok'}
+assert held.exists()
+assert (failed/new.name).exists() and (failed/new.with_suffix('.instagram.ok').name).exists()
+report.write_text(json.dumps({'ok':True,'recovery':first,'disabled_only_kept_in_queue':True,
+    'later_active_work_not_starved':True,'api_restriction_detected':True,
+    'blocked_tiktok_not_retried':True,'instagram_continues_with_tiktok_media_preserved':True}),encoding='utf-8')
 '''
 
 def main():

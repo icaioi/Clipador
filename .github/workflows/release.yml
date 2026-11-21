@@ -43,6 +43,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Signed updater checks failed' }
           python check_pending.py
           if ($LASTEXITCODE -ne 0) { throw 'Pending publication recovery checks failed' }
+          python check_restricoes.py
+          if ($LASTEXITCODE -ne 0) { throw 'Provider posting restriction checks failed' }
       - name: Download and verify immutable clean baseline
         env:
           BASELINE_SHA256: ${{ vars.CLIPADOR_RUNTIME_SHA256 }}

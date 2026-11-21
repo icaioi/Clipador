@@ -13,7 +13,8 @@ from monitor_transform import transform as monitor
 HERE=Path(__file__).parent
 RUNTIME_HELPERS=('clipador_youtube.py','youtube_chat.py','clipador_contas.py',
                  'clipador_cleanup.py','clipador_tutorial.py','clipador_componentes.py',
-                 'clipador_monitor.py','clipador_updater.py','clipador_launcher.py','clipador_pending.py')
+                 'clipador_monitor.py','clipador_updater.py','clipador_launcher.py','clipador_pending.py',
+                 'clipador_restricoes.py')
 
 def source_codes(name):
     code=compile((HERE/name).read_text(encoding='utf-8'),name,'exec')

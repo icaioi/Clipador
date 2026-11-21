@@ -35,6 +35,18 @@ def transform(code):
                 instructions[start:position+1]=_fragment(
                     'ok_todos = confirmado_nas_redes(video, desativadas)',
                     local_names=('video','confirmado_nas_redes'))
+            if 'clipador_restricoes' not in c.co_names:
+                position=next(i for i,op in enumerate(instructions) if isinstance(op,Instr) and op.name=='STORE_FAST' and op.arg=='desativadas')
+                instructions[position+1:position+1]=_fragment(
+                    'from clipador_restricoes import restricoes_ativas, registrar_restricao, RestricaoPublicacao\n'
+                    'desativadas = restricoes_ativas(falhas, plataformas, _registrar)',
+                    local_names=('falhas',))
+                position=next(i for i,op in enumerate(instructions) if isinstance(op,Instr) and op.name=='STORE_FAST' and op.arg=='exc')
+                instructions[position+1:position+1]=_fragment(
+                    'if isinstance(exc, RestricaoPublicacao):\n'
+                    '    desativadas.add(plat)\n'
+                    '    registrar_restricao(falhas, exc.rede, exc.codigo, exc.motivo, _registrar)',
+                    local_names=('falhas','plat','exc','RestricaoPublicacao','registrar_restricao'))
             for op in instructions:
                 if isinstance(op,Instr) and op.name=='LOAD_GLOBAL' and op.arg==(True,'print'):
                     op.arg=(True,'_registrar')
