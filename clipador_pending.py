@@ -15,14 +15,15 @@ _NAME = re.compile(r'(.+)_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})\Z')
 
 def _safe(path, root):
     path = Path(os.path.abspath(path))
-    if not path.is_relative_to(root) or not path.resolve().is_relative_to(root):
+    resolved = path.resolve()
+    if not resolved.is_relative_to(root):
         raise ValueError('Pasta ou arquivo fora da pasta de clipes: ' + str(path))
     for part in (path, *path.parents):
-        if part == root:
+        if part.resolve() == root:
             break
         if part.is_symlink() or (hasattr(part, 'is_junction') and part.is_junction()):
             raise ValueError('Link de pasta ou arquivo recusado: ' + str(part))
-    return path
+    return resolved
 
 
 def _move_media(source, destination):

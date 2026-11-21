@@ -251,6 +251,32 @@ class PendingRecoveryTests(unittest.TestCase):
         self.assertTrue(confirmado_nas_redes(video, ['tiktok']))
         self.assertTrue(confirmado_nas_redes(video, ['instagram', 'tiktok']))
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows short path aliases')
+    def test_short_path_alias_recovers_inside_same_canonical_root(self):
+        import ctypes
+        from ctypes import wintypes
+        video, _ = self.clip()
+        self.sidecar(video, '.instagram.ok')
+        api = ctypes.windll.kernel32.GetShortPathNameW
+        api.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
+        api.restype = wintypes.DWORD
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = api(str(self.root), buffer, len(buffer))
+        if not length or length >= len(buffer):
+            self.skipTest('No short path available for fixture')
+        short = Path(buffer.value)
+        canonical = self.root.resolve()
+        if short == canonical:
+            self.skipTest('Volume does not expose a different 8.3 alias')
+        failed = short / self.failed.relative_to(self.root)
+        ready = short / self.ready.relative_to(self.root)
+        self.assertEqual(recuperar_pendentes(canonical, failed, ready,
+                         ['tiktok', 'instagram'], self.logs.append), 1)
+        target = self.ready / 'nota 08' / video.name
+        self.assertEqual(target.read_bytes(), b'video-canal_com_underscores')
+        self.assertTrue(target.with_suffix('.instagram.ok').is_file())
+        self.assertFalse(video.exists())
+
     def test_symlink_escapes_are_not_followed(self):
         video, _ = self.clip()
         outside = self.home / 'outside'
